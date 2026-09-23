@@ -40,6 +40,14 @@ thead th{position:sticky;top:0;background:#fff;font-weight:600;color:var(--muted
 tr.flag td{background:var(--flag);color:var(--flag-ink);}
 .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;margin-top:12px;}
 .meta{font-size:12px;color:var(--muted);margin-top:10px;}
+.searchwrap{position:relative;flex:1;min-width:220px;}
+.results{position:absolute;left:0;right:0;top:calc(100% + 4px);background:#fff;border:1px solid var(--line);border-radius:8px;max-height:260px;overflow-y:auto;z-index:20;box-shadow:0 6px 18px rgba(0,0,0,.15);display:none;}
+.results.open{display:block;}
+.results .opt{padding:8px 10px;cursor:pointer;font-size:13.5px;border-bottom:1px solid var(--line);}
+.results .opt:last-child{border-bottom:none;}
+.results .opt:hover,.results .opt.active{background:var(--paper);}
+.results .opt b{font-weight:600;}
+.results .empty{padding:10px;color:var(--muted);font-size:13px;}
 .warn{border:1px solid #e0b23a;background:#fff8e6;color:#6b4e00;border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:14px;}
 #reportHead{display:none;}
 @media print{
@@ -75,9 +83,12 @@ tr.flag td{background:var(--flag);color:var(--flag-ink);}
   </section>
 
   <section class="card" id="pickCard">
-    <label for="storeSelect">Store</label>
+    <label for="storeSearch">Store</label>
     <div class="row">
-      <select id="storeSelect"><option>Loading…</option></select>
+      <div class="searchwrap">
+        <input type="text" id="storeSearch" autocomplete="off" placeholder="Type a store name or code…">
+        <div class="results" id="storeResults"></div>
+      </div>
       <button id="printBtn" class="ghost" disabled>Print / Save as PDF</button>
     </div>
     <div class="meta" id="dataMeta"></div>
@@ -140,25 +151,55 @@ async function init(){
   wireMeta();
 }
 
+let storesIndex = [];
+
 function wireMeta(){
   db.doc('meta/index').onSnapshot(doc=>{
     const data = doc && doc.exists ? doc.data() : null;
-    const sel = $('storeSelect');
     if(!data || !data.stores || !data.stores.length){
-      sel.innerHTML = '<option value="">No data yet — upload a sheet below</option>';
+      storesIndex = [];
       setStatus('No spreadsheet uploaded yet.');
       return;
     }
-    const sorted = [...data.stores].sort((a,b)=>a.name.localeCompare(b.name));
-    const prev = sel.value;
-    sel.innerHTML = '<option value="">Select a store…</option>' + sorted.map(s=>`<option value="${s.id}">${s.name} (${s.id})</option>`).join('');
-    if(prev) sel.value = prev;
+    storesIndex = [...data.stores].sort((a,b)=>a.name.localeCompare(b.name));
     setStatus('Last updated ' + new Date(data.updatedAt).toLocaleString() + ' · ' + data.stores.length + ' stores loaded.');
+    if(document.activeElement === $('storeSearch')) renderResults($('storeSearch').value);
   }, err=>setStatus('Could not load store list: '+err.message));
 }
 
-$('storeSelect').addEventListener('change', async e=>{
-  const id = e.target.value;
+function escapeHtml(s){ return (s+'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function renderResults(query){
+  const box = $('storeResults');
+  const q = query.trim().toLowerCase();
+  let matches = storesIndex;
+  if(q) matches = storesIndex.filter(s => s.name.toLowerCase().includes(q) || s.id.toLowerCase().includes(q));
+  matches = matches.slice(0, 40);
+  if(!storesIndex.length){
+    box.innerHTML = '<div class="empty">No stores loaded yet — upload a sheet above.</div>';
+  } else if(!matches.length){
+    box.innerHTML = '<div class="empty">No store matches "'+escapeHtml(query)+'".</div>';
+  } else {
+    box.innerHTML = matches.map(s=>`<div class="opt" data-id="${s.id}"><b>${escapeHtml(s.name)}</b> — ${escapeHtml(s.id)}</div>`).join('');
+  }
+  box.classList.add('open');
+}
+
+$('storeSearch').addEventListener('input', e=> renderResults(e.target.value));
+$('storeSearch').addEventListener('focus', e=> renderResults(e.target.value));
+document.addEventListener('click', e=>{
+  if(!e.target.closest('.searchwrap')) $('storeResults').classList.remove('open');
+});
+$('storeResults').addEventListener('click', e=>{
+  const opt = e.target.closest('.opt');
+  if(!opt) return;
+  selectStore(opt.dataset.id);
+});
+
+async function selectStore(id){
+  const s = storesIndex.find(x=>x.id===id);
+  $('storeSearch').value = s ? (s.name + ' (' + s.id + ')') : id;
+  $('storeResults').classList.remove('open');
   $('printBtn').disabled = !id;
   if(!id || !db) return;
   $('dataMeta').textContent = 'Loading…';
@@ -167,7 +208,7 @@ $('storeSelect').addEventListener('change', async e=>{
     const d = snap && snap.exists ? snap.data() : null;
     renderStore(id, d);
   }catch(err){ $('dataMeta').textContent = 'Could not load this store: '+err.message; }
-});
+}
 
 function renderStore(id, d){
   if(!d){ $('tbody').innerHTML = '<tr><td colspan="6">No data for this store.</td></tr>'; return; }
