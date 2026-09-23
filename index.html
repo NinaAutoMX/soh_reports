@@ -109,7 +109,6 @@ tr.flag td{background:var(--flag);color:var(--flag-ink);}
 </main>
 
 <script>
-
 const firebaseConfig = {
   apiKey: "AIzaSyA8oOFrEjkEFmjHj9Dc1Rdu7ZXa2aRcaW0",
   authDomain: "soh-reports.firebaseapp.com",
@@ -238,13 +237,10 @@ $('fileInput').addEventListener('change', async e=>{
     await wb.xlsx.load(buf);
     const ws = wb.worksheets.find(w=>/sales report/i.test(w.name)) || wb.worksheets[0];
     const header = ws.getRow(2).values;
-    // The 12 month columns always sit at 10-21, but which month is first
-    // rolls forward each week (e.g. Oct..Sep, then Nov..Oct, etc).
-    // We only want January onward, so find "Jan" and start there.
     const rawMonths = [];
     for(let c=10;c<=21;c++){ rawMonths.push((header[c] ?? '').toString().trim()); }
     let janOffset = rawMonths.findIndex(m => /^jan/i.test(m));
-    if(janOffset === -1) janOffset = 0; // fallback: keep the full window if "Jan" isn't found
+    if(janOffset === -1) janOffset = 0;
     const monthColStart = 10 + janOffset;
     const monthColEnd = 21;
     const months = rawMonths.slice(janOffset);
