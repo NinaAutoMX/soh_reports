@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stock On Hand Reports</title>
+
+<!-- ====== Firebase (free "Spark" plan) — this is your shared database ====== -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+
+<style>
+:root{
+  --ink:#1b2430; --paper:#f6f4ef; --line:#d9d3c6; --accent:#0f5c4c;
+  --accent-ink:#eafff8; --flag:#ffc9d4; --flag-ink:#6b0f24; --muted:#6b7280;
+}
+*{box-sizing:border-box;}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+header{padding:22px 20px 10px;border-bottom:1px solid var(--line);}
+h1{font-size:20px;margin:0 0 2px;letter-spacing:-.01em;}
+.sub{color:var(--muted);font-size:13px;}
+main{max-width:920px;margin:0 auto;padding:18px 20px 60px;}
+section{margin-bottom:22px;}
+.card{border:1px solid var(--line);border-radius:10px;padding:16px;background:#fff;}
+label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px;}
+select,input[type=file]{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);font-size:14px;}
+button{border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);padding:9px 16px;border-radius:7px;font-size:14px;font-weight:600;cursor:pointer;}
+button.ghost{background:transparent;color:var(--ink);border-color:var(--line);}
+button:disabled{opacity:.5;cursor:default;}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+.status{font-size:13px;color:var(--muted);margin-top:8px;min-height:18px;}
+.bar{height:6px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:8px;display:none;}
+.bar > i{display:block;height:100%;width:0%;background:var(--accent);transition:width .2s;}
+table{width:100%;border-collapse:collapse;font-size:12.5px;}
+th,td{padding:6px 7px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap;}
+th:nth-child(1),td:nth-child(1),th:nth-child(2),td:nth-child(2){text-align:left;white-space:normal;}
+thead th{position:sticky;top:0;background:#fff;font-weight:600;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.03em;}
+tr.flag td{background:var(--flag);color:var(--flag-ink);}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;margin-top:12px;}
+.meta{font-size:12px;color:var(--muted);margin-top:10px;}
+.warn{border:1px solid #e0b23a;background:#fff8e6;color:#6b4e00;border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:14px;}
+#reportHead{display:none;}
+@media print{
+  * {-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;}
+  body *{visibility:hidden;}
+  #report,#report *{visibility:visible;}
+  #report{position:absolute;top:0;left:0;width:100%;}
+  #reportHead{display:block;margin-bottom:10px;}
+  .tablewrap{border:none;}
+  th,td{font-size:11px;}
+  header,#uploadCard,#pickCard{display:none;}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Stock On Hand Reports</h1>
+  <div class="sub">Upload the weekly sheet once — everyone with this link sees the same data.</div>
+</header>
+<main>
+  <div class="warn" id="configWarning" style="display:none;">
+    This page hasn't been connected to a database yet. Open the file and fill in the
+    <code>firebaseConfig</code> object near the top of the &lt;script&gt; tag — see SETUP.md for the exact steps.
+  </div>
+
+  <section class="card" id="uploadCard">
+    <label for="fileInput">Replace weekly spreadsheet (must contain a "SALES REPORT" sheet)</label>
+    <div class="row">
+      <input type="file" id="fileInput" accept=".xlsx">
+    </div>
+    <div class="bar" id="bar"><i id="barFill"></i></div>
+    <div class="status" id="uploadStatus">Connecting…</div>
+  </section>
+
+  <section class="card" id="pickCard">
+    <label for="storeSelect">Store</label>
+    <div class="row">
+      <select id="storeSelect"><option>Loading…</option></select>
+      <button id="printBtn" class="ghost" disabled>Print / Save as PDF</button>
+    </div>
+    <div class="meta" id="dataMeta"></div>
+  </section>
+
+  <section id="report">
+    <div id="reportHead">
+      <h1 id="reportStoreName" style="font-size:16px;margin:0;"></h1>
+      <div class="sub" id="reportDate"></div>
+    </div>
+    <div class="tablewrap">
+      <table id="dataTable">
+        <thead><tr id="theadRow"></tr></thead>
+        <tbody id="tbody"><tr><td colspan="6" style="text-align:center;color:var(--muted);padding:20px;">Pick a store to see its stock report.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+
+const firebaseConfig = {
+  apiKey: "AIzaSyA8oOFrEjkEFmjHj9Dc1Rdu7ZXa2aRcaW0",
+  authDomain: "soh-reports.firebaseapp.com",
+  projectId: "soh-reports",
+  storageBucket: "soh-reports.firebasestorage.app",
+  messagingSenderId: "750109242576",
+  appId: "1:750109242576:web:52fd9373aee74572b41ad5"
+};
+
+let db = null;
+const $ = id => document.getElementById(id);
+const configured = firebaseConfig.apiKey !== "YOUR_API_KEY";
+
+function setStatus(t){ $('uploadStatus').textContent = t; }
+function pinkish(fill){
+  if(!fill || fill.type!=='pattern' || !fill.fgColor || !fill.fgColor.argb) return false;
+  const a = fill.fgColor.argb.toUpperCase();
+  if(a==='FFFFC0CB') return true;
+  if(a.length!==8) return false;
+  const r=parseInt(a.slice(2,4),16), g=parseInt(a.slice(4,6),16), b=parseInt(a.slice(6,8),16);
+  return r>200 && g<200 && b<210 && r-g>30;
+}
+
+async function init(){
+  if(!configured){
+    $('configWarning').style.display='block';
+    setStatus('Not connected — fill in firebaseConfig, see SETUP.md.');
+    return;
+  }
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+  try{
+    await firebase.auth().signInAnonymously();
+  }catch(err){
+    setStatus('Sign-in failed: ' + err.message + ' (check that Anonymous auth is enabled).');
+    return;
+  }
+  setStatus('Connected. Waiting for the latest upload…');
+  wireMeta();
+}
+
+function wireMeta(){
+  db.doc('meta/index').onSnapshot(doc=>{
+    const data = doc && doc.exists ? doc.data() : null;
+    const sel = $('storeSelect');
+    if(!data || !data.stores || !data.stores.length){
+      sel.innerHTML = '<option value="">No data yet — upload a sheet below</option>';
+      setStatus('No spreadsheet uploaded yet.');
+      return;
+    }
+    const sorted = [...data.stores].sort((a,b)=>a.name.localeCompare(b.name));
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">Select a store…</option>' + sorted.map(s=>`<option value="${s.id}">${s.name} (${s.id})</option>`).join('');
+    if(prev) sel.value = prev;
+    setStatus('Last updated ' + new Date(data.updatedAt).toLocaleString() + ' · ' + data.stores.length + ' stores loaded.');
+  }, err=>setStatus('Could not load store list: '+err.message));
+}
+
+$('storeSelect').addEventListener('change', async e=>{
+  const id = e.target.value;
+  $('printBtn').disabled = !id;
+  if(!id || !db) return;
+  $('dataMeta').textContent = 'Loading…';
+  try{
+    const snap = await db.doc('stores/'+id).get();
+    const d = snap && snap.exists ? snap.data() : null;
+    renderStore(id, d);
+  }catch(err){ $('dataMeta').textContent = 'Could not load this store: '+err.message; }
+});
+
+function renderStore(id, d){
+  if(!d){ $('tbody').innerHTML = '<tr><td colspan="6">No data for this store.</td></tr>'; return; }
+  const head = ['Article','Description','PK', ...(d.months||[]), 'ST','SOH','DSC'];
+  $('theadRow').innerHTML = head.map(h=>`<th>${h}</th>`).join('');
+  $('tbody').innerHTML = d.rows.map(r=>{
+    const cells = [r.a, r.d, r.p, ...r.m, r.st, r.soh, r.dsc]
+      .map((v,i)=>`<td>${v ?? ''}</td>`).join('');
+    return `<tr class="${r.f?'flag':''}">${cells}</tr>`;
+  }).join('');
+  $('dataMeta').textContent = d.rows.length + ' items · updated ' + new Date(d.updatedAt).toLocaleDateString();
+  $('reportStoreName').textContent = d.name + ' (' + id + ') — Stock On Hand';
+  $('reportDate').textContent = 'Printed ' + new Date().toLocaleDateString();
+}
+
+$('printBtn').addEventListener('click', ()=> window.print());
+
+$('fileInput').addEventListener('change', async e=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  if(!db){ setStatus('Not connected to a database — see SETUP.md.'); return; }
+  $('bar').style.display='block'; $('barFill').style.width='2%';
+  setStatus('Reading spreadsheet…');
+  try{
+    const buf = await file.arrayBuffer();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf);
+    const ws = wb.worksheets.find(w=>/sales report/i.test(w.name)) || wb.worksheets[0];
+    const header = ws.getRow(2).values;
+    // The 12 month columns always sit at 10-21, but which month is first
+    // rolls forward each week (e.g. Oct..Sep, then Nov..Oct, etc).
+    // We only want January onward, so find "Jan" and start there.
+    const rawMonths = [];
+    for(let c=10;c<=21;c++){ rawMonths.push((header[c] ?? '').toString().trim()); }
+    let janOffset = rawMonths.findIndex(m => /^jan/i.test(m));
+    if(janOffset === -1) janOffset = 0; // fallback: keep the full window if "Jan" isn't found
+    const monthColStart = 10 + janOffset;
+    const monthColEnd = 21;
+    const months = rawMonths.slice(janOffset);
+
+    const stores = {};
+    ws.eachRow({includeEmpty:false}, (row, rowNumber)=>{
+      if(rowNumber < 3) return;
+      const v = c => row.getCell(c).value;
+      const storeId = v(4);
+      if(!storeId) return;
+      const storeName = v(5) || storeId;
+      const flagged = pinkish(row.getCell(1).fill);
+      const m = [];
+      for(let c=monthColStart;c<=monthColEnd;c++){ m.push(v(c) ?? 0); }
+      const entry = {
+        a: v(2), d: v(3), p: v(9),
+        m, st: v(22), soh: v(23), dsc: (typeof v(24)==='number' ? Math.round(v(24)*100)/100 : v(24)),
+        f: flagged
+      };
+      if(!stores[storeId]) stores[storeId] = {name: storeName, rows: []};
+      stores[storeId].rows.push(entry);
+    });
+
+    const ids = Object.keys(stores);
+    if(!ids.length) throw new Error('No store rows found — check the sheet is named "SALES REPORT" with the usual columns.');
+    setStatus('Saving ' + ids.length + ' stores…');
+    for(let i=0;i<ids.length;i++){
+      const id = ids[i];
+      await db.doc('stores/'+id).set({name: stores[id].name, months, rows: stores[id].rows, updatedAt: Date.now()});
+      $('barFill').style.width = Math.round(((i+1)/ids.length)*100)+'%';
+      setStatus('Saving store ' + (i+1) + ' of ' + ids.length + ' — ' + stores[id].name);
+    }
+    await db.doc('meta/index').set({
+      stores: ids.map(id=>({id, name: stores[id].name, count: stores[id].rows.length})),
+      updatedAt: Date.now()
+    });
+    setStatus('Done — ' + ids.length + ' stores updated.');
+  }catch(err){
+    setStatus('Upload failed: ' + err.message);
+  }finally{
+    setTimeout(()=>{ $('bar').style.display='none'; }, 1500);
+    $('fileInput').value = '';
+  }
+});
+
+init();
+</script>
+</body>
+</html>
